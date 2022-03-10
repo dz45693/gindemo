@@ -41,6 +41,15 @@ func main() {
 		response(c, 200, "ok", req)
 	})
 
+	r.POST("/form", func(c *gin.Context) {
+		req := ReqObj{}
+		err := c.ShouldBind(&req)
+		if err != nil {
+			fmt.Print(err)
+		}
+		response(c, 200, "ok", req)
+	})
+
 	r.POST("/upload", func(c *gin.Context) {
 		file, err := c.FormFile("file")
 		if err != nil {

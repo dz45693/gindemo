@@ -41,7 +41,7 @@ func AesGcmDecrypt() gin.HandlerFunc {
 			}
 		}()
 
-		if c.Request.Method != "GET" && c.Request.Method != "POST" {
+		if c.Request.Method == "OPTIONS" {
 			c.Next()
 		} else {
 			md5key := aes.GetAesKey("gavin12345678")
@@ -53,13 +53,10 @@ func AesGcmDecrypt() gin.HandlerFunc {
 
 //请求和返回都加密 解密
 func handleAes(c *gin.Context, md5key string) {
-	if c.Request.Method != "GET" && c.Request.Method != "POST" {
-		return
-	}
-
 	contentType := c.Request.Header.Get("Content-Type")
 	isJsonRequest := strings.Contains(contentType, "application/json")
 	isFileRequest := strings.Contains(contentType, "multipart/form-data")
+	isFormUrl := strings.Contains(contentType, "application/x-www-form-urlencoded")
 
 	if c.Request.Method == "GET" {
 		err := parseQuery(c, md5key)
@@ -69,7 +66,7 @@ func handleAes(c *gin.Context, md5key string) {
 			response(c, 2001, "系统错误", err.Error())
 			return
 		}
-	} else if c.Request.Method == "POST" && isJsonRequest {
+	} else if isJsonRequest {
 		err := parseJson(c, md5key)
 		if err != nil {
 			log("handleAes parseJson err:%v", err)
@@ -77,8 +74,16 @@ func handleAes(c *gin.Context, md5key string) {
 			response(c, 2001, "系统错误", err.Error())
 			return
 		}
-	} else if c.Request.Method == "POST" && isFileRequest {
-		err := parseFile2(c, md5key)
+	} else if isFormUrl {
+		err := parseForm(c, md5key)
+		if err != nil {
+			log("handleAes parseForm err:%v", err)
+			//这里输出应该密文 一旦加密解密调试好 这里就不会走进来
+			response(c, 2001, "系统错误", err.Error())
+			return
+		}
+	} else if isFileRequest {
+		err := parseFile(c, md5key)
 		if err != nil {
 			log("handleAes parseFile err:%v", err)
 			//这里输出应该密文 一旦加密解密调试好 这里就不会走进来
@@ -117,6 +122,7 @@ func handleAes(c *gin.Context, md5key string) {
 	_, _ = c.Writer.WriteString(encryptStr)
 }
 
+//处理json
 func parseJson(c *gin.Context, md5key string) error {
 	//读取数据 body处理
 	payload, err := c.GetRawData()
@@ -152,6 +158,47 @@ func parseJson(c *gin.Context, md5key string) error {
 	return nil
 }
 
+func parseForm(c *gin.Context, md5key string) error {
+	//读取数据 body处理
+	payload, err := c.GetRawData()
+	if err != nil {
+		return err
+	}
+
+	///解密body数据 请求的json是"encryptString= value含有gcm的12字节nonce,实际长度大于32
+	if payload != nil && len(payload) > 20 {
+		var jsonData encryptJson
+		log("AesGcmDecrypt  parseForm url:%s md5key:%s,old data:%s,", c.Request.URL.String(), md5key, string(payload))
+
+		values, err := url.ParseQuery(string(payload))
+		if err != nil {
+			log("AesGcmDecrypt parseForm ParseQuery err:%v", err)
+			return err
+		}
+
+		payloadText := values.Get("encryptString")
+		if len(payloadText) > 0 {
+			mapData, err := gcmDecryptString(md5key, payloadText)
+			if err != nil {
+				log("AesGcmDecrypt parseForm gcmDecryptString err:%v", err)
+				return err
+			}
+
+			for k, v := range mapData {
+				values.Add(k, getStr(v))
+			}
+
+			formData := values.Encode()
+			log("AesGcmDecrypt  parseForm url:%s md5key:%s,encryptString:%s,decrypt data:%s", c.Request.URL.String(), md5key, jsonData.EncryptString, formData)
+			payload = []byte(formData)
+		}
+	}
+
+	c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(payload))
+
+	return nil
+}
+
 //处理get url的解密
 func parseQuery(c *gin.Context, md5Key string) error {
 	encryptString := c.Query("encryptString")
@@ -161,19 +208,7 @@ func parseQuery(c *gin.Context, md5Key string) error {
 		return nil
 	}
 
-	//解密
-	plaintext, err := aes.GcmDecrypt(md5Key, encryptString)
-	if err != nil {
-		return err
-	}
-
-	if len(plaintext) < 3 {
-		//plaintext 应该是json 串 {}
-		return nil
-	}
-
-	queryData := make(map[string]interface{}, 0)
-	err = json.Unmarshal([]byte(plaintext), &queryData)
+	queryData, err := gcmDecryptString(md5Key, encryptString)
 	if err != nil {
 		return err
 	}
@@ -190,82 +225,7 @@ func parseQuery(c *gin.Context, md5Key string) error {
 	return nil
 }
 
-//处理文件上传
 func parseFile(c *gin.Context, md5Key string) error {
-	defaultMaxMemory := 32 << 20 //默认大小
-	err := c.Request.ParseMultipartForm(int64(defaultMaxMemory))
-	if err != nil {
-		return err
-	}
-
-	encryptString := c.Request.MultipartForm.Value["encryptString"][0]
-	log("AesGcmDecrypt parseFile url:%s, md5key:%s, encryptString:%s", c.Request.URL.String(), md5Key, encryptString)
-
-	if len(encryptString) < 1 {
-		return nil
-	}
-
-	plaintext, err := aes.GcmDecrypt(md5Key, encryptString)
-	if err != nil {
-		return err
-	}
-
-	if len(plaintext) < 3 {
-		//plaintext 应该是json 串 {}
-		return nil
-	}
-
-	formData := make(map[string]interface{}, 0)
-	err = json.Unmarshal([]byte(plaintext), &formData)
-	if err != nil {
-		return err
-	}
-
-	//准备重写数据
-	bodyBuf := &bytes.Buffer{}
-	wr := multipart.NewWriter(bodyBuf)
-
-	//准备普通form数据
-	for k, v := range formData {
-		val := getStr(v)
-		err = wr.WriteField(k, val)
-		if err != nil {
-			log("AesGcmDecrypt parseFile WriteField :%s=%s, err:%v", k, val, err)
-		}
-	}
-
-	//准备file form数据
-	for name := range c.Request.MultipartForm.File {
-		fileInfo := c.Request.MultipartForm.File[name][0]
-		fileWr, err := wr.CreateFormFile(name, fileInfo.Filename)
-		if err != nil {
-			log("AesGcmDecrypt parseFile CreateFormFile :%s=%s, err:%v", name, fileInfo.Filename, err)
-		}
-
-		fileObj, err := fileInfo.Open()
-		if err != nil {
-			log("AesGcmDecrypt parseFile Open file :%s, err:%v", name, err)
-		}
-
-		fileByte, err := ioutil.ReadAll(fileObj)
-		if err != nil {
-			log("AesGcmDecrypt parseFile ReadAll file:%s, err:%v", name, err)
-		}
-
-		_ = fileObj.Close()
-		_, _ = fileWr.Write(fileByte)
-	}
-
-	//写结尾标志
-	_ = wr.Close()
-	c.Request.Header.Set("Content-Type", wr.FormDataContentType())
-	c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBuf.Bytes()))
-
-	return nil
-}
-
-
-func parseFile2(c *gin.Context, md5Key string) error {
 	contentType := c.Request.Header.Get("Content-Type")
 	_, params, _ := mime.ParseMediaType(contentType)
 	boundary, ok := params["boundary"]
@@ -285,23 +245,35 @@ func parseFile2(c *gin.Context, md5Key string) error {
 
 		if err != nil {
 			log("NextPart err:%v", err)
+			break
 		}
 
-		slurp, err := ioutil.ReadAll(p)
+		fileByte, err := ioutil.ReadAll(p)
 		if err != nil {
 			log("ReadAll err:%v", err)
+			break
 		}
 
 		pName := p.FormName()
 		fileName := p.FileName()
 		if len(fileName) < 1 {
 			if pName == "encryptString" {
-				err = writeEncryptString(wr, md5Key, string(slurp))
+				formData, err := gcmDecryptString(md5Key, string(fileByte))
 				if err != nil {
-					log("AesGcmDecrypt parseFile writeEncryptString err:%v", err)
+					log("AesGcmDecrypt writeFile gcmDecryptString err:%v", err)
+					break
 				}
-			}else{
-				wr.WriteField(pName, string(slurp))
+
+				for k, v := range formData {
+					val := getStr(v)
+					err = wr.WriteField(k, val)
+					if err != nil {
+						log("AesGcmDecrypt writeFile WriteField :%s=%s, err:%v", k, val, err)
+						break
+					}
+				}
+			} else {
+				wr.WriteField(pName, string(fileByte))
 			}
 		} else {
 			tmp, err := wr.CreateFormFile(pName, fileName)
@@ -309,7 +281,7 @@ func parseFile2(c *gin.Context, md5Key string) error {
 				log("AesGcmDecrypt parseFile CreateFormFile err:%v", err)
 				continue
 			}
-			tmp.Write(slurp)
+			tmp.Write(fileByte)
 		}
 	}
 
@@ -321,40 +293,29 @@ func parseFile2(c *gin.Context, md5Key string) error {
 	return nil
 }
 
-func writeEncryptString(wr *multipart.Writer, md5Key, encryptString string) error {
+func gcmDecryptString(md5Key, encryptString string) (map[string]interface{}, error) {
+	formData := make(map[string]interface{}, 0)
 	if len(encryptString) < 1 {
-		return nil
+		return formData, nil
 	}
 
 	plaintext, err := aes.GcmDecrypt(md5Key, encryptString)
 	if err != nil {
-		return err
+		return formData, err
 	}
 
 	if len(plaintext) < 3 {
 		//plaintext 应该是json 串 {}
-		return nil
+		return formData, nil
 	}
 
-	formData := make(map[string]interface{}, 0)
 	err = json.Unmarshal([]byte(plaintext), &formData)
 	if err != nil {
-		return err
+		return formData, err
 	}
 
-	//准备重写数据
-	//准备普通form数据
-	for k, v := range formData {
-		val := getStr(v)
-		err = wr.WriteField(k, val)
-		if err != nil {
-			log("AesGcmDecrypt writeFile WriteField :%s=%s, err:%v", k, val, err)
-		}
-	}
-
-	return nil
+	return formData, nil
 }
-
 
 func isJsonResponse(c *gin.Context) bool {
 	contentType := c.Writer.Header().Get("Content-Type")
@@ -378,7 +339,7 @@ type encryptJson struct {
 }
 
 func log(format string, arg ...interface{}) {
-	fmt.Print(fmt.Sprintf(format, arg))
+	fmt.Print(fmt.Sprintf(format, arg...))
 }
 func response(c *gin.Context, code int, msg string, data interface{}) {
 	mapData := make(map[string]interface{}, 0)
