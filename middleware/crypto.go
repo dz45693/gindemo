@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"demo/aes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
+	"io"
 	"io/ioutil"
+	"mime"
 	"mime/multipart"
 	"net/url"
 	"runtime/debug"
@@ -75,7 +78,7 @@ func handleAes(c *gin.Context, md5key string) {
 			return
 		}
 	} else if c.Request.Method == "POST" && isFileRequest {
-		err := parseFile(c, md5key)
+		err := parseFile2(c, md5key)
 		if err != nil {
 			log("handleAes parseFile err:%v", err)
 			//这里输出应该密文 一旦加密解密调试好 这里就不会走进来
@@ -260,6 +263,98 @@ func parseFile(c *gin.Context, md5Key string) error {
 
 	return nil
 }
+
+
+func parseFile2(c *gin.Context, md5Key string) error {
+	contentType := c.Request.Header.Get("Content-Type")
+	_, params, _ := mime.ParseMediaType(contentType)
+	boundary, ok := params["boundary"]
+	if !ok {
+		return errors.New("no multipart boundary param in Content-Type")
+	}
+
+	//准备重写数据
+	bodyBuf := &bytes.Buffer{}
+	wr := multipart.NewWriter(bodyBuf)
+	mr := multipart.NewReader(c.Request.Body, boundary)
+	for {
+		p, err := mr.NextPart() //p的类型为Part
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			log("NextPart err:%v", err)
+		}
+
+		slurp, err := ioutil.ReadAll(p)
+		if err != nil {
+			log("ReadAll err:%v", err)
+		}
+
+		pName := p.FormName()
+		fileName := p.FileName()
+		if len(fileName) < 1 {
+			if pName == "encryptString" {
+				err = writeEncryptString(wr, md5Key, string(slurp))
+				if err != nil {
+					log("AesGcmDecrypt parseFile writeEncryptString err:%v", err)
+				}
+			}else{
+				wr.WriteField(pName, string(slurp))
+			}
+		} else {
+			tmp, err := wr.CreateFormFile(pName, fileName)
+			if err != nil {
+				log("AesGcmDecrypt parseFile CreateFormFile err:%v", err)
+				continue
+			}
+			tmp.Write(slurp)
+		}
+	}
+
+	//写结尾标志
+	_ = wr.Close()
+	c.Request.Header.Set("Content-Type", wr.FormDataContentType())
+	c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBuf.Bytes()))
+
+	return nil
+}
+
+func writeEncryptString(wr *multipart.Writer, md5Key, encryptString string) error {
+	if len(encryptString) < 1 {
+		return nil
+	}
+
+	plaintext, err := aes.GcmDecrypt(md5Key, encryptString)
+	if err != nil {
+		return err
+	}
+
+	if len(plaintext) < 3 {
+		//plaintext 应该是json 串 {}
+		return nil
+	}
+
+	formData := make(map[string]interface{}, 0)
+	err = json.Unmarshal([]byte(plaintext), &formData)
+	if err != nil {
+		return err
+	}
+
+	//准备重写数据
+	//准备普通form数据
+	for k, v := range formData {
+		val := getStr(v)
+		err = wr.WriteField(k, val)
+		if err != nil {
+			log("AesGcmDecrypt writeFile WriteField :%s=%s, err:%v", k, val, err)
+		}
+	}
+
+	return nil
+}
+
 
 func isJsonResponse(c *gin.Context) bool {
 	contentType := c.Writer.Header().Get("Content-Type")
