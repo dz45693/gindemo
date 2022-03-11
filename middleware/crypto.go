@@ -215,7 +215,8 @@ func parseQuery(c *gin.Context, md5Key string) error {
 
 	var args []string
 	for k, v := range queryData {
-		args = append(args, fmt.Sprintf("%s=%s", k, url.QueryEscape(getStr(v))))
+		//args = append(args, fmt.Sprintf("%s=%s", k, url.QueryEscape(getStr(v))))
+		args = append(args, fmt.Sprintf("%s=%s", k, getStr(v)))
 	}
 
 	queryString := strings.Join(args, "&")
