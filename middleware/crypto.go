@@ -214,15 +214,14 @@ func parseQuery(c *gin.Context, md5Key string) error {
 	}
 
 	var args []string
+	var logs []string
 	for k, v := range queryData {
-		//args = append(args, fmt.Sprintf("%s=%s", k, url.QueryEscape(getStr(v))))
-		args = append(args, fmt.Sprintf("%s=%s", k, getStr(v)))
+		args = append(args, fmt.Sprintf("%s=%s", k, url.QueryEscape(getStr(v))))
+		logs = append(logs, fmt.Sprintf("%s=%s", k, getStr(v)))
 	}
 
-	queryString := strings.Join(args, "&")
-	c.Request.URL.RawQuery = queryString
-
-	log("AesGcmDecrypt parseQuery  url:%s, md5key:%s, encryptString:%s, decrypt data:%s", c.Request.URL.String(), md5Key, encryptString, queryString)
+	log("AesGcmDecrypt parseQuery  url:%s, md5key:%s, encryptString:%s, decrypt data:%s", c.Request.URL.String(), md5Key, encryptString,  strings.Join(logs, "&"))
+	c.Request.URL.RawQuery =  strings.Join(args, "&")
 	return nil
 }
 

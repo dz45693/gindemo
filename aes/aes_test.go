@@ -10,7 +10,7 @@ func TestEncrypt(t *testing.T) {
 	md5key := GetAesKey("gavin12345678")
 
 	mapData := make(map[string]interface{}, 0)
-	mapData["name"] = "gavin"
+	mapData["name"] = "ga&vin"
 	mapData["age"] = 25
 	mapData["update_time"] = time.Now().Unix()
 	mapData["folder"] = "test"
