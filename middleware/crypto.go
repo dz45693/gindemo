@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
-	"github.com/shopspring/decimal"
 	"io"
 	"io/ioutil"
 	"mime"
 	"mime/multipart"
 	"net/url"
 	"runtime/debug"
+	"strconv"
 	"strings"
 )
 
@@ -216,12 +216,13 @@ func parseQuery(c *gin.Context, md5Key string) error {
 	var args []string
 	var logs []string
 	for k, v := range queryData {
-		args = append(args, fmt.Sprintf("%s=%s", k, url.QueryEscape(getStr(v))))
-		logs = append(logs, fmt.Sprintf("%s=%s", k, getStr(v)))
+		val := getStr(v)
+		args = append(args, fmt.Sprintf("%s=%s", k, url.QueryEscape(val)))
+		logs = append(logs, fmt.Sprintf("%s=%s", k, val))
 	}
 
-	log("AesGcmDecrypt parseQuery  url:%s, md5key:%s, encryptString:%s, decrypt data:%s", c.Request.URL.String(), md5Key, encryptString,  strings.Join(logs, "&"))
-	c.Request.URL.RawQuery =  strings.Join(args, "&")
+	log("AesGcmDecrypt parseQuery  url:%s, md5key:%s, encryptString:%s, decrypt data:%s", c.Request.URL.String(), md5Key, encryptString, strings.Join(logs, "&"))
+	c.Request.URL.RawQuery = strings.Join(args, "&")
 	return nil
 }
 
@@ -326,8 +327,9 @@ func getStr(v interface{}) string {
 	val := ""
 	switch v.(type) {
 	case float64:
-		tmp, _ := decimal.NewFromString(fmt.Sprintf("%.10f", v))
-		val = tmp.String()
+		//tmp, _ := decimal.NewFromString(fmt.Sprintf("%.10f", v))
+		fl, _ := v.(float64)
+		val = strconv.FormatFloat(fl, 'f', -1, 64)
 	default:
 		val = fmt.Sprintf("%v", v)
 	}
